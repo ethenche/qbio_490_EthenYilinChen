@@ -1,0 +1,43 @@
+Bash and GitHub
+Due Date: Thursday 9/19 @ 11:59 PM
+Answer the following questions about Bash:
+● Type out definitions for the following commands and shortcuts in your own words. Refer to the slides for definitions of commands, and use google to look up the definitions of any unknown shortcuts.
+a. pwd: Print working directory - it prints out the current directory you are in
+b. mkdir: Make directory - It makes a new directory for you
+c. cd <dir>: Change directory - it moves you into another directory, either absolute or relative paths are allowed, cd without input will lead you to the home directory
+d. cd..: Takes you one directory up from your cuurent directory
+e. ls: list - list all the contents in your current directory
+f. rm and the -r flag: remove - deletes that file for rm itself, but rm -r deletes that directory, there is no undo button
+g. cat: concatenate - There are several ways of using cat as I searched on the internet, but it is mainly used to concatenate and display the contents of files.
+h. head: It displays the first 10 lines of a file
+i. tail: It displays the last 10 lines of a file
+j. scp: Secure Copy - it copies a file to another location. It can copy directory as well when used as "scp -r"
+k. nano (including Ctrl+o and Ctrl+x)：nano example.txt would open this example.txt file, if it does not exist yet, nano will create a new file called example.txt. Ctrl+o is the save change command,
+Ctrl + x is the exit command.
+l. --help: a command followed by --help provides users with information about how to use the command, including its syntax, available options, and sometimes examples of usage.
+m. TAB: TAB can be used to autocomplete usernames, directory, file names, or even command options when there is only one username/directory/file/command that start with the input. If there are multiple
+autocomplete options, it will list you all the eligible choices. 
+n. Ctrl+a: Move to the beggining of the line
+o. Ctrl+e: Move to the end of the line
+p. Ctrl+r: Reverse Search
+q. Ctrl+k: Cut to the end of the line from where the cursor is at
+r. Ctrl+u: Cut to the beginning of the line from where the cursor is at
+s. Ctrl+l: Clear the current  terminal screen
+● What command would you use to navigate to your Desktop from /Users/ using an absolute path? Relative path?
+absolute path: cd/Users/Your Username/Desktop
+relative path: cd/Desktop
+● How would you copy /Desktop/Example Folder/ with multiple documents inside to /Documents/?
+scp -r ../Example folder Documents/
+● If you didn’t know which folder you were in, how would you navigate back to /Documents/?
+Use absolute path to Documents：Users/Username/Documents/
+
+Fill in the blank:
+● To push your local changes to GitHub, use the following sequence of commands:
+git status 1.   to view any unsaved changes.
+git add 2.   to save all files, or to save a specific file/folder.
+git commit -m "[informative message about file]"3.   to commit files for saving. Use ‘-m’ to include a message.
+git push 4.   to push your changes to GitHub.
+Do it yourself!
+Use commands in Bash to add the completed homework file to your week3_bash_github folder in your local qbio_490_name repository
+Use GitHub to stage, commit, and upload your completed Bash and Github HW into your personal GitHub repo.
+Turn in your answers for this assignment by attaching a link to your personal GitHub repo on Brightspace for full credit
