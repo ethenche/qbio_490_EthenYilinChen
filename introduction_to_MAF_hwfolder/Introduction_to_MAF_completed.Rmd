@@ -1,0 +1,145 @@
+---
+title: "Introduction to MAF completed"
+author: Mahija Mogalipuvvu, adapted from Nicole Black, Wade Boohar
+date: 07/17/22
+updated: 10/3/24
+---
+
+***Deliverables***
+- upload this R Notebook to your GitHub and submit the link to your Repo on Brightspace
+- include ALL graphs or figures created in this assignment in a folder with your R notebook with descriptive file names.
+
+We encourage you to work with a partner. Therefore, it is okay if your answers are the same as your partner’s as long as everyone understands it and could explain it in their own words if asked. Each person must individually push their code to Github. *At the top of your R Notebook, write the name of you and your partner(s) as a comment.*
+
+***Complete the following coding activity and answer any following questions as comments in your R Notebook***
+
+In this assignment, you will need to use your skills learned in class to demonstrate your understanding of categorical variables and R data structures.
+```{r setup}
+knitr::opts_knit$set(root.dir = normalizePath("/home1/ethenche/490_cluster/analysis_data"))
+```
+
+*Pre-Assignment*
+Load all necessary packages, read in the clinical data.csv file you have in your analysis_data folder, and instantiate the MAF_object.
+```{r}
+clinical <- read.csv("/home1/ethenche/490_cluster/analysis_data/brca_clinical_data.csv")
+maf_query <- GDCquery(
+  project = 'TCGA-BRCA',
+  data.category = "Simple Nucleotide Variation",
+  access = "open", # we only have access to somatic mutations which are open access
+  data.type = "Masked Somatic Mutation",
+  workflow.type = "Aliquot Ensemble Somatic Variant Merging and Masking"
+)
+
+#GDCdownload(maf_query)
+
+maf <- GDCprepare(maf_query) # as long as it runs, ignore any errors
+
+maf_object <- read.maf(maf = maf,
+                       clinicalData = clinical, 
+                       isTCGA = TRUE)
+
+
+```
+
+
+*1*
+Choose a clinical variable (or any variable from clin_rad or clin_drug) to separate your populations into two different groups and rewrite the column or create a new column with that variable as a factor. ***Do not use age or vital_status as your clinical variable.*** Hint: if your variable is continuous, you will need to determine your own cutoffs for the different levels of the factor. If your variable is categorical and has more than two possible values, choose the two that are the most common.
+```{r}
+clinical = maf_object@clinical.data
+
+
+maf_object@clinical.data$survival_time <- ifelse(
+  maf_object@clinical.data$death_days_to == "[Not Applicable]", 
+  maf_object@clinical.data$last_contact_days_to, 
+  maf_object@clinical.data$death_days_to
+)
+maf_object@clinical.data[,113]
+
+median_survival <- median(as.numeric(maf_object@clinical.data$survival_time))
+print(median_survival)
+
+maf_object@clinical.data$survival_time_range <- ifelse(as.numeric(maf_object@clinical.data$survival_time) > median_survival,'long survival time', 'short survival time')
+
+
+```
+
+
+*2*
+Create a co-oncoplot with the top 10-20 (you choose) most mutated genes for the two groups. Pick one that has a large discrepancy in % mutated or type of mutations between the groups and research it. 
+Research it. What is the gene used for? Can you think of any reason for the discrepancy?
+
+I found that the patient with short survival time have 36% of them with PIK3CA gene mutated, while the patients with long survival time only have 32% of them  with PIK3CA gene mutated. I searched about this gene and got the following information:"The PIK3CA gene is a gene that provides instructions for making the p110 alpha (p110α) protein, which is a subunit of the phosphatidylinositol 3-kinase (PI3K) enzyme. The PI3K enzyme is involved in many important cellular functions, including cell growth, division, and survival. 
+Mutations in the PIK3CA gene can cause the PI3K enzyme to become overactive, which can lead to cancer cell growth". 
+Therefore, as searched, this gene is used for cell proliferation, and the mutated version of this gene can make the enzyme that is involved in cellular proliferation overreact and eventually lead to cancer development. I have also found online that the mutation with this gene does correlate with shorter survival time. As this gene correlate with cell growth and proliferation, the mutated version of this gene often makes cancer more aggressive and proliferate faster, making the expected survival time relatively shorter. 
+```{r}
+short_mask <- ifelse(maf_object@clinical.data$survival_time_range == 'short survival time', T, F)
+short_patient_barcodes <- maf_object@clinical.data$Tumor_Sample_Barcode[short_mask]
+short_maf <- subsetMaf(maf = maf_object,
+                       tsb = short_patient_barcodes)
+
+long_mask <- ifelse(maf_object@clinical.data$survival_time_range == 'long survival time', T, F)
+long_patient_barcodes <- maf_object@clinical.data$Tumor_Sample_Barcode[long_mask]
+long_maf <- subsetMaf(maf = maf_object,
+                       tsb = long_patient_barcodes)
+
+coOncoplot(m1 = short_maf, 
+           m2 = long_maf, 
+           m1Name = "short survival time", 
+           m2Name = "long survival time", 
+           borderCol = NA)
+```
+
+
+*3*
+Create a contingency table with your variable and chosen gene. Run a Fisher’s Exact Test between presence of mutations for that gene and your clinical variable. Create and save a mosaic plot. 
+Interpret the output of the Fisher’s Exact Test in terms of the odds ratio and p-value.
+The p-value for my Fisher's Exact Test is greater than 0.05, showing that the correlation between survivial time range and PIK3CA mutation is not statistically significant. Even though this is not the result I am expecting, this is the result, and this might show that there is no significant correlation between PIK3CA mutation and survival time range. In temrs of odds ratio, the 1.158926 odds ratio shows that there is 1.158926x chance that a patient have PIK3CA mutation and have a relatively short amount of survival time.
+
+
+```{r}
+
+gene_mask <- maf_object@data$Hugo_Symbol == "PIK3CA"
+patients_with_PIK3CA <- unique(maf_object@data$Tumor_Sample_Barcode[gene_mask])
+#maf_object@clinical.data have a patient barcode corresponding to one row, so the number of rows in clinical.data equals the number of patients, but for maf_object@data, we could have one patient with multiple gene mutations or multiple patients having the same gene mutation, therefore, the rows in maf_object@data does not equal the number of patients. To solve this，I used the function unique I searched online and this function is supposed to isolate any duplicate in tumor_sample_barcode for one gene.
+
+maf_object@clinical.data$PIK3CA_mutation <- ifelse(maf_object@clinical.data$Tumor_Sample_Barcode %in% patients_with_PIK3CA, T, F)
+maf_object@clinical.data$survival_time_range <- factor(maf_object@clinical.data$survival_time_range)
+maf_object@clinical.data$PIK3CA_mutation <- factor(maf_object@clinical.data$PIK3CA_mutation)
+contig <- table(maf_object@clinical.data$survival_time_range, maf_object@clinical.data$PIK3CA_mutation)
+mosaicplot(contig)
+fisher_test <- fisher.test(contig)
+fisher_test
+
+fisher_test$p.value
+
+```
+
+
+*4*
+Subset your maf_object based on your chosen clinical variable and create a co-lollipop plot of your chosen gene divided between the two different clinical variable possibilities. Include descriptive names on your plot.
+Do you notice any difference in terms of mutations (e.g. sites, types, number) between the two populations?
+There is not a clear different in ters of mutations(sites,types,number) between patients with relatively shorter survival time compared to patients with longer survival time. However, patients with shorter survival time have some more missense mutations on the PI2Ka_I portion, which could probably be one of the reasons why based on the cooncoplot above, patients with shorter survival time have a higher mutation rate on PIK3CA gene than petients with longer survival time. 
+```{r}
+lollipopPlot2(m1 = short_maf, 
+              m2 = long_maf, 
+              m1_name = 'short survival time',
+              m2_name = 'long survival time',
+              gene = 'PIK3CA') 
+```
+
+
+*5*
+Create your Overall_Survival_Status column and create a mafSurvival KM plot based on mutations in your chosen gene.
+Does there seem to be a difference? Hypothesize why or not based on the other analysis you did with the gene above.
+There is a different between mutant and wild type, but it seems like that the mutant have a higher survival rate than the wild type, which was not what I have assumed above. I thought that the more mutated PIK53 gene in shorter survival time patients shows that the mutation in this gene links to lower survival rate. But the plot also kind of make sence since a lot of times in mutation, a gene is either activated or silenced. It might be for those having higher survival rate with mutant PIK3CA have silented PIK3CA. Since PIK3CA itself is a proto-oncogene, silencing it would indeed slow down the process of cancer and improve the survival rate
+```{r}
+maf_object@clinical.data$survival_time <- ifelse(maf_object@clinical.data$vital_status == "Dead", maf_object@clinical.data$death_days_to, maf_object@clinical.data$last_contact_days_to)
+
+maf_object@clinical.data$Overall_Survival_Status <- maf_object@clinical.data$vital_status == "Dead"
+
+mafSurvival(maf = maf_object,
+            genes = "PIK3CA",
+            time = "survival_time",
+            Status = "Overall_Survival_Status",  
+            isTCGA = TRUE)
+```
