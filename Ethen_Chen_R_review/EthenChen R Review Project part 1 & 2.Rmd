@@ -1,0 +1,403 @@
+---
+title: "EthenChen R Review Project Part 1&2 (Wade gave me an extention to 11:59pm Nov 19th)"
+output: html_notebook
+---
+
+
+
+```{r setup}
+knitr::opts_knit$set(root.dir = normalizePath("/home1/ethenche/490_cluster/analysis_data"))
+```
+
+Part 1: Review Questions
+
+General Concepts
+
+1. What is TCGA and why is it important?
+TCGA stands for The Cancer Genome Atlas and is a publicly available multi-omic dataset organized by the NCI and NHGRI. It is important because it contains over 20000 samples of 33 types of cancer and it allows us to explore a wide range of genes across a large patient sample.
+
+2. What are some strengths and weaknesses of TCGA?
+TCGA is consists of real patients’ data and includes multi-omic approaches such as clinical, genomic, transcriptomic, and epigenomic. With the wide range of data in TCGA, we could conduct research on cancer on a multi-omic level, investigating how different omics affect cancer patients in different ways. However, since all the data of TCGA comes from real cancer patients, there is a lot of unavailable data (NA), which affects data analysis. In addition, the collection of data for TCGA is not inclusive enough, with underrepresentation of certain ethnic groups, and has limited data for rare cancers.
+
+Coding Skills
+
+1. What commands are used to save a file to your GitHub repository?
+ 1) git add + filename
+ 2) git commit -m "commit message"
+ 3) git push
+2. What command(s) must be run in order to use a package in R?
+1) (to install the package) install.packages("packageName")
+2) (to load the package) library(packageName)
+3. What command(s) must be run in order to use a Bioconductor package in R?
+1) if (!require("BiocManager", quietly = TRUE))
+   install.packages("BiocManager")
+   BiocManager::install(version = "3.19")
+2) if (!require("packagename", quietly = TRUE))
+   BiocManager::install("packagename")
+3) library(packageName)
+4. What is boolean indexing? What are some applications of it?
+Boolean indexing is a way to filter data in dataframes by using conditions to create a Boolean mask (TRUE or FALSE values). Only elements where the condition is TRUE are returned.
+Some applications we learned in class are(extracted from class lecture slides) :"
+1. Keep certain data and rewrite into a new dataframe/overwrite existing
+dataframe
+a. Deleting null data (NAs)
+b. Subsetting data (young/old, male/female)
+2. Select certain data points based on given row/column
+a. Getting patient id of female patients"
+5. Draw a mock up (just a few rows and columns) of a sample dataframe. Show an example 
+of the following and explain what each line of code does.
+a. an ifelse() statement
+b. boolean indexing
+```{r}
+df <- data.frame(
+  patientID = 1:6,
+  Age = c(18, 27, 38, 46, 59, 63),
+  Sex = c("Female", "Male", "Male", "Female", "Male", "Female")
+)
+print(df)
+#making an example dataframe with 5 patients, three variables(patientID, Age, and Sex)
+df$ageCategory <- ifelse(df$Age < 35, "Young", ifelse(df$Age > 55, "Old", "Middle age"))
+#using ifelse statement, categorized the patients into three groups based on their age. 
+ageMask <- df$ageCategory == "Young"
+maskedDf <- df[ageMask,]
+#I cleaned out all patients that dose not belong to the "Young" category by using an ageMask and boolean indexing.
+```
+Part two: 
+downloading and loading all the data and packages needed
+```{r}
+library(BiocManager)#loading all the neccesary libraries
+library(TCGAbiolinks)
+library(maftools)
+library(SummarizedExperiment)
+if (!require(survival)) {
+  install.packages("survival")
+}
+if (!require(survminer)) {
+  install.packages("survminer")
+}
+if (!require(ggplot2)) {
+  install.packages("ggplot2")
+}
+library(survival)
+library(survminer)
+library(ggplot2)
+if (!require("DESeq2", quietly = TRUE))
+BiocManager::install("DESeq2")
+install.packages("DESeq2")
+library(DESeq2)
+if (!requireNamespace("BiocManager", quietly = TRUE))
+    install.packages("BiocManager")
+BiocManager::install("EnhancedVolcano")
+library(EnhancedVolcano)
+if (!require("sesameData", quietly = TRUE))
+BiocManager::install("sesameData")
+
+if (!require("sesame", quietly = TRUE))
+BiocManager::install("sesame")
+
+if (!require("limma", quietly = TRUE))
+BiocManager::install("limma")
+library(sesame)
+library(sesameData)
+library(limma)
+
+#download and load the required packages
+
+
+
+#downloading the transcriptomics data
+rna_query <- GDCquery(project ="TCGA-SKCM",
+                      data.category = "Transcriptome Profiling",
+                      data.type = "Gene Expression Quantification",
+                      workflow.type = "STAR - Counts")
+#GDCdownload(rna_query)
+rna_se <- GDCprepare(rna_query)
+
+#downloading the epigenomics data
+ query <- GDCquery(project = "TCGA-SKCM",
+                  data.category = "DNA Methylation",
+                  data.type = "Methylation Beta Value",
+                  platform = "Illumina Human Methylation 450",
+                  data.format = "Dataframe")
+#GDCdownload(query)
+methylation450 <- GDCprepare(query)
+```
+
+```{r}
+rna_clinical <-as.data.frame(rna_se@colData)#get rna_clinical dataframe
+column_mask <- ifelse(colnames(rna_clinical)  %in% c("treatments", "primary_site", "disease_type"), F, T) #clean the rna_clinical dataframe
+rna_clinical <- rna_clinical[,column_mask]
+write.csv(rna_clinical, "/home1/ethenche/490_cluster/analysis_data/SKCM_rna_clinical.csv", row.names=FALSE)#write it as csv and read it
+rna_clinical <- read.csv("/home1/ethenche/490_cluster/analysis_data/SKCM_rna_clinical.csv")
+rna_genes <- rna_se@rowRanges@elementMetadata # get rna_genes dataframe and write it as dataframe and read it
+rna_genes <- as.data.frame(rna_genes)
+write.csv(rna_genes, "/home1/ethenche/490_cluster/analysis_data/SKCM_rna_genes.csv")
+rna_genes <- read.csv("/home1/ethenche/490_cluster/analysis_data/SKCM_rna_genes.csv", row.names=1 )
+rna_counts <- rna_se@assays@data$unstranded# get rna_counts dataframe and write it as dataframe and read it, also substitute it's column names with the barcode column as rna_clinical and its row names as the gene_id column at the rna_genes
+rna_counts<- as.data.frame(rna_counts)
+colnames(rna_counts) <- rna_clinical$barcode
+rownames(rna_counts) <- rna_genes$gene_id
+write.csv(rna_counts, "/home1/ethenche/490_cluster/analysis_data/SKCM_rna_counts.csv")
+rna_counts <- read.csv("/home1/ethenche/490_cluster/analysis_data/SKCM_rna_counts.csv", row.names=1)
+rad <- clinical.BCRtab.all$clinical_radiation_skcm[-c(1,2),] # get rad dataframe and write it as dataframe and read it
+write.csv(rad, "/home1/ethenche/490_cluster/analysis_data/SKCM_rad.csv", row.names=FALSE)
+rad <- read.csv("/home1/ethenche/490_cluster/analysis_data/SKCM_rad.csv")
+drug <- clinical.BCRtab.all$clinical_drug_skcm[-c(1,2),] # get drug dataframe and write it as dataframe and read it
+write.csv(drug, "/home1/ethenche/490_cluster/analysis_data/SKCM_drug.csv", row.names=FALSE)
+drug <- read.csv("/home1/ethenche/490_cluster/analysis_data/SKCM_drug.csv")
+write.csv(results, "/home1/ethenche/490_cluster/analysis_data/SKCM_results.csv", row.names=FALSE)
+results <- read.csv("/home1/ethenche/490_cluster/analysis_data/SKCM_results.csv") # write the result dataframe and read it. The result dataframe is the result from the transcription DESeq analysis.
+```
+
+1. Difference in survival between metastatic and non-metastatic patients (KM plot)
+
+```{r}
+vital_status_na_mask <- ifelse(rna_clinical$vital_status == "[Not Available]", FALSE,
+TRUE)
+rna_clinical <- rna_clinical[vital_status_na_mask,]
+
+#cleaning for na values in the vital status column
+```
+
+```{r}
+definition_mask <- !is.na(rna_clinical$definition)
+rna_clinical <- rna_clinical[definition_mask, ]
+rna_clinical$sortedDefinition <- ifelse(rna_clinical$definition == "Metastatic", "Metastatic patient", ifelse(rna_clinical$definition == "Primary solid Tumor", "Non-metastatic patient", "Neither"))
+neitherMask <- ifelse(rna_clinical$sortedDefinition == "Neither", F, T)
+rna_clinical <- rna_clinical[neitherMask, ]
+#cleaning the na values in definition column and sorting them to metastatic and non metastatic patients in a new column, cleaning the "neither" portion as well since we are only interested in patient with cancer in their body, either metastatic or not. 
+```
+
+
+```{r}
+rna_clinical$survival_time <- ifelse(is.na(rna_clinical$days_to_death), rna_clinical$days_to_last_follow_up, rna_clinical$days_to_death)
+rna_clinical$survival_time <- as.numeric(rna_clinical$survival_time)
+rna_clinical$death_event <- ifelse(rna_clinical$vital_status == "Dead",T, F)
+#getting the survival time of patients by using their days_to_death, and if it is na, use days_to_last_follow_up instead.
+```
+
+```{r}
+survival_object <- Surv(time = rna_clinical$survival_time,
+                        event = rna_clinical$death_event)
+
+fit_object <- survfit(survival_object ~ sortedDefinition, data = rna_clinical)
+#setting up the survival_object and fit_object
+```
+
+```{r}
+survplot <- ggsurvplot(fit_object,
+                       pval=TRUE,
+                       ggtheme = theme(plot.margin = unit(c(1,1,1,1), "cm")),
+                       legend = 'right')
+
+KM_plot <- survplot$plot + theme_bw() + theme(axis.title = element_text(size=20), 
+                                              axis.text = element_text(size=16),
+                                              legend.title = element_text(size=14),
+                                              legend.text = element_text(size=12))
+
+KM_plot
+#plotting the KM plot out
+```
+2. Differential expression between non-metastatic and metastatic patients controlling for treatment effects, race, gender, and vital status (DESeq2 + Volcano plot)
+a. Treatments must include radiation, chemotherapy, immunotherapy, molecular therapy, vaccine
+```{r}
+# for here I cleaned both the rna_clinical and rna_counts together as I made those masks. Therefore, I didn't use the rna_counts_filtered dataframe cause it is unnecessary.
+#variate
+definition_mask <- !is.na(rna_clinical$definition)
+rna_clinical <- rna_clinical[definition_mask, ]
+rna_counts <- rna_counts[, definition_mask]
+rna_clinical$sortedDefinition <- ifelse(rna_clinical$definition == "Metastatic", "Metastatic patient", ifelse(rna_clinical$definition == "Primary solid Tumor", "Non-metastatic patient", "Neither"))
+neitherMask <- ifelse(rna_clinical$sortedDefinition == "Neither", F, T)
+rna_clinical <- rna_clinical[neitherMask, ]
+rna_counts <- rna_counts[,neitherMask]
+#cleaning the na values in definition column and sorting them to metastatic and non metastatic patients in a new column, cleaning the "neither" portion as well since we are only interested in patient with cancer in their body, either metastatic or not. 
+rna_clinical$sortedDefinition <- factor(rna_clinical$sortedDefinition)
+
+#covariates
+#for vital status:
+vital_status_na_mask <- ifelse(rna_clinical$vital_status == "[Not Available]", FALSE,
+TRUE)
+rna_clinical <- rna_clinical[vital_status_na_mask,]
+rna_counts <- rna_counts[, vital_status_na_mask]
+rna_clinical$vital_status <- factor(rna_clinical$vital_status)
+#for gender:
+gender_na_mask <- ifelse(rna_clinical$gender == "[Not Available]", FALSE,
+TRUE)
+rna_clinical <- rna_clinical[gender_na_mask,]
+rna_counts <- rna_counts[, gender_na_mask]
+
+rna_clinical$gender <- factor(rna_clinical$gender)
+#for race:
+race_na_mask <- ifelse(rna_clinical$race == "not reported", FALSE,
+TRUE)
+rna_clinical <- rna_clinical[race_na_mask,]
+rna_counts <- rna_counts[, race_na_mask]
+rna_clinical$race <- factor(rna_clinical$race)
+
+#For treatments:
+
+rna_clinical$radiation <- ifelse(rna_clinical$patient %in% rad$bcr_patient_barcode, 1, 0)
+rna_clinical$radiation <- factor(rna_clinical$radiation)
+rna_clinical$chemo <- ifelse(rna_clinical$patient %in% drug$bcr_patient_barcode & drug$pharmaceutical_therapy_type == "Chemotherapy", 1,0)
+rna_clinical$chemo <- factor(rna_clinical$chemo)
+rna_clinical$immuno <- ifelse(rna_clinical$patient %in% drug$bcr_patient_barcode & drug$pharmaceutical_therapy_type == "Immunotherapy", 1,0)
+rna_clinical$immuno <- factor(rna_clinical$immuno)
+rna_clinical$vaccine <- ifelse(rna_clinical$patient %in% drug$bcr_patient_barcode & drug$pharmaceutical_therapy_type == "Vaccine", 1,0)
+rna_clinical$vaccine <- factor(rna_clinical$vaccine)
+rna_clinical$molecular <- ifelse(rna_clinical$patient %in% drug$bcr_patient_barcode & drug$pharmaceutical_therapy_type == "Targeted Molecular therapy", 1,0)
+rna_clinical$molecular <- factor(rna_clinical$molecular)
+
+
+
+# pre-filtering genes
+
+
+
+less_20_mask <- rowSums(rna_counts) >=20
+rna_counts<- rna_counts[less_20_mask,]
+rna_genes <- rna_genes[less_20_mask,]
+
+
+
+
+```
+
+
+```{r}
+#running the real DESeqData here, using gender, vital_status, race, radiation, chemo, immuno, vaccine, and molecular as covariates and sortedDefinition as variate.
+dds <- DESeqDataSetFromMatrix(countData = rna_counts,
+                              colData = rna_clinical,
+                              design= ~gender + vital_status + race + radiation + chemo + immuno + vaccine + molecular + sortedDefinition)
+
+dds_obj <- DESeq(dds)
+
+resultsNames(dds_obj)
+
+results <- results(dds_obj, format = "DataFrame", 
+                   contrast = c("sortedDefinition", "Metastatic patient", "Non-metastatic patient" ))
+
+results <- data.frame(results)
+#analyze and get the results dataframe
+```
+
+```{r}
+
+#assigning the gene names to results dataframe
+#assigning the -log10 values
+results[, "-log10(padj)"] <- -log10(results$padj)
+results[, "gene_name"] <- rna_genes$gene_name
+```
+
+```{r}
+#generating the enhanced volcano plot
+EnhancedVolcano(results,
+                lab = results$gene_name,
+                x = "log2FoldChange",
+                y = "padj",
+                title = "Definition: metastatic vs Non-metastatic SKCM",
+                pointSize = 1.0,
+                labSize = 5.0)
+```
+
+3 ) Methylation differences between metastatic and non-metastatic patients
+
+```{r}
+methylation_clinical <- as.data.frame(methylation450@colData)
+betas <- as.data.frame(methylation450@assays@data@listData)
+cpg_sites <- as.data.frame(methylation450@rowRanges@elementMetadata)
+#getting those dataframes in the environment from the methylation data downloaded from TCGA
+
+column_mask <- ifelse(colnames(methylation_clinical) %in% c('treatments', 'primary_site', 'disease_type'), F, T)
+methylation_clinical <- methylation_clinical[,column_mask]
+write.csv(methylation_clinical, 'skcm_methylation_clinical.csv', row.names=FALSE)
+# mask out the list values in methylation_clinical so we can write it as a csv
+
+site_mask <- !grepl('-', cpg_sites$gene) & !grepl(';', cpg_sites$gene) & !is.na(cpg_sites$gene) & complete.cases(betas)
+betas <- betas[site_mask,]
+cpg_sites <- cpg_sites[site_mask,]
+# mask out the CpG sites that we don't want to study in this review project.
+
+write.csv(betas, 'skcm_methylation_betas.csv')
+write.csv(cpg_sites, 'skcm_cpg_sites.csv')
+methylation_clinical <- read.csv("/home1/ethenche/490_cluster/analysis_data/skcm_methylation_clinical.csv")
+betas <- read.csv("/home1/ethenche/490_cluster/analysis_data/skcm_methylation_betas.csv", row.names=1)
+cpg_sites <- read.csv("/home1/ethenche/490_cluster/analysis_data/skcm_cpg_sites.csv", row.names=1)
+#writing and reading csv files codes for later use.
+```
+
+```{r}
+
+other_values_mask <- methylation_clinical$definition %in% c('Metastatic', 'Primary solid Tumor')
+methylation_clinical<- methylation_clinical[other_values_mask,]
+betas <- betas[, other_values_mask]
+#masking all the values other than "metastatic" and "Primary Solid Tumor", only keeping the metastatic and non-metastatic patients
+
+methylation_clinical$metastatic <- methylation_clinical$definition == 'Metastatic' # 
+#assigning the column we are going to use the the later analysis.
+
+mval <- t(apply(betas, 1, function(x) log2(x/(1-x))))# finding which site is more differentially methylated
+
+design <- model.matrix(~ metastatic, data = methylation_clinical) # make and interpret the lm model
+fit <- lmFit(mval, design)
+fit2 <- eBayes(fit)
+```
+
+```{r}
+dat <- data.frame(foldchange = fit[["coefficients"]][,2], logPvalue =  -log10(p.adjust(fit2[["p.value"]][,2],method='BY')), geneName = cpg_sites$gene)
+dat$threshold <- as.factor(abs(dat$foldchange) < 1)
+# extracting the fit model into a dataframe
+#Visualization
+cols <- c("TRUE" = "grey", "FALSE" = "blue")
+ggplot(data=dat, aes(x=foldchange, y = logPvalue, color=threshold)) +
+  geom_point(alpha=.2, size=0.6) +
+  scale_colour_manual(values = cols) +
+  geom_vline(xintercept = 1, colour="#990000", linetype="dashed") + 
+  geom_vline(xintercept = - 1, colour="#990000", linetype="dashed") +
+  geom_hline(yintercept = 2, colour = "#990000", linetype="dashed") +
+  theme(legend.position="none") +
+  xlab("Fold Change") +
+  ylab("-log10 p value") +
+  theme_bw() +
+  theme(legend.position = "none")
+#plotting the data
+```
+4. Direct comparison of methylation status to transcriptional activity across non-metastatic vs metastatic patients
+```{r}
+downregulated <- results[(results$log2FoldChange < -1), 'gene_name']
+hypermethylated <- dat[dat$foldchange > 0.75, 'geneName']
+interest_genes <- intersect(downregulated, hypermethylated)
+interest_genes
+#filtering genes that are both downregulated in the results dataframe and hypermethylated in the dat dataframe.
+```
+
+```{r}
+GENE<-"LINC00482"
+
+gene_counts_mask <- rna_genes$gene_name == GENE
+gene_betas_mask <- cpg_sites$gene == GENE
+
+rna_clinical_metastatic <- rna_clinical$definition == "Metastatic"
+methylation_clinical_metastatic <- methylation_clinical$definition == "Metastatic"
+
+rna_clinical_non_metastatic <- rna_clinical$definition == "Primary solid Tumor"
+methylation_clinical_non_metastatic <- methylation_clinical$definition == "Primary solid Tumor"
+
+rna_metastatic <- as.numeric(rna_counts[gene_counts_mask, rna_clinical_metastatic])
+methylation_metastatic <- (betas[gene_betas_mask, methylation_clinical_metastatic])
+
+rna_non_metastatic <- as.numeric(rna_counts[gene_counts_mask, rna_clinical_non_metastatic])
+methylation_non_metastatic <- (betas[gene_betas_mask, methylation_clinical_non_metastatic])
+#preparing the data for expression and methylation plotting.
+```
+
+```{r}
+boxplot(rna_non_metastatic, rna_metastatic, xlab='Group', ylab='Counts', names=c('Non_metastatic', 'metastatic'))
+#make a boxplot for the difference in expression in different groups
+```
+```{r}
+plot(1:dim(methylation_non_metastatic)[1], apply(methylation_non_metastatic, 1, mean), col='blue', type='h', lwd=3, ylab='Average Beta', xlab='CpG sites')
+lines(1.3:(dim(methylation_non_metastatic)[1]+0.3), apply(methylation_metastatic, 1, mean), col='red', type='h', lwd=3)
+#make a plot showing the difference in methylation.
+```
+
+
