@@ -1,0 +1,426 @@
+---
+title: "R Final Project"
+output: html_notebook
+---
+
+This is an [R Markdown](http://rmarkdown.rstudio.com) Notebook. When you execute code within the notebook, the results appear beneath the code. 
+
+Try executing this chunk by clicking the *Run* button within the chunk or by placing your cursor inside it and pressing *Ctrl+Shift+Enter*. 
+
+```{r setup}
+knitr::opts_knit$set(root.dir = normalizePath("/home1/ethenche/490_cluster/analysis_data"))
+```
+
+```{r}
+library(BiocManager)#loading all the necessary libraries and packages
+library(TCGAbiolinks)
+library(maftools)
+library(SummarizedExperiment)
+if (!require(survival)) {
+  install.packages("survival")
+}
+if (!require(survminer)) {
+  install.packages("survminer")
+}
+if (!require(ggplot2)) {
+  install.packages("ggplot2")
+}
+library(survival)
+library(survminer)
+library(ggplot2)
+if (!require("DESeq2", quietly = TRUE))
+BiocManager::install("DESeq2")
+install.packages("DESeq2")
+library(DESeq2)
+if (!requireNamespace("BiocManager", quietly = TRUE))
+    install.packages("BiocManager")
+BiocManager::install("EnhancedVolcano")
+library(EnhancedVolcano)
+if (!require("sesameData", quietly = TRUE))
+BiocManager::install("sesameData")
+
+if (!require("sesame", quietly = TRUE))
+BiocManager::install("sesame")
+
+if (!require("limma", quietly = TRUE))
+BiocManager::install("limma")
+library(sesame)
+library(sesameData)
+library(limma)
+
+#download the clinical data
+clin_query <- GDCquery(project = "TCGA-LUAD",
+data.category = "Clinical",
+data.type = "Clinical Supplement",
+data.format = 'BCR Biotab')
+#GDCdownload(clin_query)
+clinical.BCRtab.all <- GDCprepare(clin_query)
+  
+clinic <- clinical.BCRtab.all$clinical_patient_luad[-c(1,2),]
+
+colnames(clinic)[ colnames(clinic) == "bcr_patient_barcode" ] <- "Tumor_Sample_Barcode"
+clinical <- clinic
+#dowload the mutation data
+maf_query <- GDCquery(
+  project = 'TCGA-LUAD',
+  data.category = "Simple Nucleotide Variation",
+  access = "open", # we only have access to somatic mutations which are open access
+  data.type = "Masked Somatic Mutation",
+  workflow.type = "Aliquot Ensemble Somatic Variant Merging and Masking"
+)
+
+#GDCdownload(maf_query)
+
+maf <- GDCprepare(maf_query) # as long as it runs, ignore any errors
+
+maf_object <- read.maf(maf = maf,
+                       clinicalData = clinical, 
+                       isTCGA = TRUE)
+#download the transcriptomics data
+rna_query <- GDCquery(project ="TCGA-LUAD",
+                      data.category = "Transcriptome Profiling",
+                      data.type = "Gene Expression Quantification",
+                      workflow.type = "STAR - Counts")
+#GDCdownload(rna_query)
+rna_se <- GDCprepare(rna_query)
+
+#download the epigenomics data
+ query <- GDCquery(project = "TCGA-LUAD",
+                  data.category = "DNA Methylation",
+                  data.type = "Methylation Beta Value",
+                  platform = "Illumina Human Methylation 450",
+                  data.format = "Dataframe")
+#GDCdownload(query)
+methylation450 <- GDCprepare(query)
+```
+
+```{r}
+write.csv(clinic, "/home1/ethenche/490_cluster/analysis_data/LUAD_clinic.csv")
+clinic <- read.csv("/home1/ethenche/490_cluster/analysis_data/LUAD_clinic.csv", row.names=1) # write clinic as csv and read it
+rna_clinical <-as.data.frame(rna_se@colData)#get rna_clinical dataframe
+column_mask <- ifelse(colnames(rna_clinical)  %in% c("treatments", "primary_site", "disease_type"), F, T) #clean the rna_clinical dataframe
+rna_clinical <- rna_clinical[,column_mask]
+write.csv(rna_clinical, "/home1/ethenche/490_cluster/analysis_data/LUAD_rna_clinical.csv")#write it as csv and read it
+rna_clinical <- read.csv("/home1/ethenche/490_cluster/analysis_data/LUAD_rna_clinical.csv", row.names=1)
+rna_genes <- rna_se@rowRanges@elementMetadata # get rna_genes dataframe and write it as dataframe and read it
+rna_genes <- as.data.frame(rna_genes)
+write.csv(rna_genes, "/home1/ethenche/490_cluster/analysis_data/LUAD_rna_genes.csv")
+rna_genes <- read.csv("/home1/ethenche/490_cluster/analysis_data/LUAD_rna_genes.csv", row.names=1 )
+rna_counts <- rna_se@assays@data$unstranded# get rna_counts dataframe and write it as dataframe and read it, also substitute it's column names with the rowname of adapted_clinical which will be introduced later and its row names as the gene_id column at the rna_genes
+rna_counts<- as.data.frame(rna_counts)
+colnames(rna_counts) <- rownames(adapted_clinical)
+rownames(rna_counts) <- rna_genes$gene_id
+write.csv(rna_counts, "/home1/ethenche/490_cluster/analysis_data/LUAD_rna_counts.csv")
+rna_counts <- read.csv("/home1/ethenche/490_cluster/analysis_data/LUAD_rna_counts.csv", row.names=1)
+```
+
+```{r}
+#the following code chunk is for cleaning and sorting the clinic data frame
+#Mask NAs in vital status
+vital_status_na_mask <- !is.na(clinic$vital_status)
+cleaned_clinic <- clinic[vital_status_na_mask, ]
+
+#Filter non-smokers from patients whose pack years are not available
+cleaned_clinic$tobacco_smoking_pack_years_smoked <- ifelse(
+  cleaned_clinic$tobacco_smoking_history_indicator == 1 & cleaned_clinic$tobacco_smoking_pack_years_smoked == "[Not Available]",
+  0,
+  cleaned_clinic$tobacco_smoking_pack_years_smoked
+)
+cleaned_clinic$tobacco_smoking_pack_years_smoked <- as.numeric(cleaned_clinic$tobacco_smoking_pack_years_smoked)
+
+# Calculate quartiles for pack years
+quantiles <- quantile(cleaned_clinic$tobacco_smoking_pack_years_smoked, probs = c(0.25, 0.5, 0.75), na.rm = TRUE)
+
+
+# Assign categories based on quartiles
+cleaned_clinic$smoking_category <- ifelse(
+  cleaned_clinic$tobacco_smoking_pack_years_smoked == 0, "Non-smoker",
+  ifelse(cleaned_clinic$tobacco_smoking_pack_years_smoked <= quantiles[1], "Low Exposure",
+  ifelse(cleaned_clinic$tobacco_smoking_pack_years_smoked <= quantiles[2], "Moderate Exposure",
+  ifelse(cleaned_clinic$tobacco_smoking_pack_years_smoked <= quantiles[3], "High Exposure", "Very High Exposure"))))
+
+
+#Mask NAs in smoking categories
+smoking_mask <- !is.na(cleaned_clinic$smoking_category)
+cleaned_clinic <- cleaned_clinic[smoking_mask, ]
+
+
+
+
+
+
+
+```
+
+```{r}
+row.names(cleaned_clinic) <- cleaned_clinic$Tumor_Sample_Barcode
+adapted_clinical <- cleaned_clinic[rna_clinical$patient,]#this code is used to match up the columns in rna_clinical with the columns in cleaned_clinic since we used some column that is only present in the cleaned_clinic data frame but not present in the rna_clinical data frame when we are sorting the non-smoker and very high exposure patients.
+adapted_clinical_na_mask <- !is.na(adapted_clinical$bcr_patient_uuid)
+adapted_clinical_cleaned <- adapted_clinical[adapted_clinical_na_mask, ]#this code is used the mask out all the NA values in the bcr_patient_uuid column, essentially masking the patients that does not belong to the cleaned_clinic out.
+adapted_clinical_cleaned$smoking_category <- ifelse(adapted_clinical_cleaned$smoking_category == "Very High Exposure", "Very High Exposure", ifelse(adapted_clinical_cleaned$smoking_category == "Non-smoker", "Non-smoker", "Neither"))
+neitherMask <- ifelse(adapted_clinical_cleaned$smoking_category == "Neither", F, T)
+adapted_clinical_cleaned <- adapted_clinical_cleaned[neitherMask, ]
+
+rna_counts_na_mask <- ifelse(colnames(rna_counts)%in%rownames(adapted_clinical_cleaned), T, F)
+rna_counts_cleaned <- rna_counts[,rna_counts_na_mask]
+#cleanning rna_counts using the rownames in adapted_clinical_cleaned data frame
+
+
+adapted_clinical_cleaned$smoking_category <- factor(adapted_clinical_cleaned$smoking_category) #factorizing the smoking category for later DESeq2 analysis
+
+vital_status_na_mask <- !is.na(adapted_clinical_cleaned$vital_status)
+adapted_clinical_cleaned <- adapted_clinical_cleaned[vital_status_na_mask, ]
+rna_counts_cleaned <- rna_counts_cleaned[,vital_status_na_mask]
+adapted_clinical_cleaned$vital_status <- factor(adapted_clinical_cleaned$vital_status)# masking out all the patients having NA vital status for both adapted_clinical_clean and rna_counts_clean and factorize the vital status for adapted_clinical_clean for DESeq2 analysis.
+
+#for gender:
+gender_na_mask <- ifelse(adapted_clinical_cleaned$gender == "[Not Available]", FALSE,
+TRUE)
+adapted_clinical_cleaned <- adapted_clinical_cleaned[gender_na_mask,]
+rna_counts_cleaned <- rna_counts_cleaned[, gender_na_mask]
+
+adapted_clinical_cleaned$gender <- factor(adapted_clinical_cleaned$gender)
+# masking out all the patients having NA gender for both adapted_clinical_clean and rna_counts_clean and factorize the gender for adapted_clinical_clean for DESeq2 analysis.
+#for race:
+race_na_mask <- ifelse(adapted_clinical_cleaned$race == "not reported", FALSE,
+TRUE)
+adapted_clinical_cleaned <- adapted_clinical_cleaned[race_na_mask,]
+rna_counts_cleaned <- rna_counts_cleaned[, race_na_mask]
+adapted_clinical_cleaned$race <- factor(adapted_clinical_cleaned$race)
+# masking out all the patients having NA race for both adapted_clinical_clean and rna_counts_clean and factorize the race for adapted_clinical_clean for DESeq2 analysis.
+
+
+
+
+
+# pre-filtering genes
+
+
+
+less_20_mask <- rowSums(rna_counts_cleaned) >=20
+rna_counts_cleaned<- rna_counts_cleaned[less_20_mask,]
+rna_genes_cleaned <- rna_genes[less_20_mask,]
+#masking out all the genes that have a sum of less than 20 in both rna_counts_cleaned and also rna_genes
+
+
+write.csv(adapted_clinical_cleaned, "/home1/ethenche/490_cluster/analysis_data/LUAD_adapted_clinical_cleaned.csv")
+adapted_clinical_cleaned <- read.csv("/home1/ethenche/490_cluster/analysis_data/LUAD_adapted_clinical_cleaned.csv", row.names=1)
+write.csv(rna_genes_cleaned, "/home1/ethenche/490_cluster/analysis_data/LUAD_rna_genes_cleaned.csv")
+rna_genes_cleaned <- read.csv("/home1/ethenche/490_cluster/analysis_data/LUAD_rna_genes_cleaned.csv", row.names=1)
+write.csv(rna_counts_cleaned, "/home1/ethenche/490_cluster/analysis_data/LUAD_rna_counts_cleaned.csv")
+rna_counts_cleaned <- read.csv("/home1/ethenche/490_cluster/analysis_data/LUAD_rna_counts_cleaned.csv", row.names=1)
+#write all those processed data frames as csv files for later use.
+
+
+```
+
+```{r}
+#running the real DESeqData here, using gender, vital_status, and race as covariates and smoking as variate.
+dds <- DESeqDataSetFromMatrix(countData = rna_counts_cleaned,
+                              colData = adapted_clinical_cleaned,
+                              design= ~gender + vital_status + race + smoking_category)
+
+dds_obj <- DESeq(dds)
+
+resultsNames(dds_obj)
+
+results <- results(dds_obj, format = "DataFrame", 
+                   contrast = c("smoking_category", "Very High Exposure", "Non-smoker" ))
+
+results <- data.frame(results)
+#analyze and get the results dataframe
+```
+
+```{r}
+write.csv(results, "/home1/ethenche/490_cluster/analysis_data/LUAD_results.csv")
+results_check <- read.csv("/home1/ethenche/490_cluster/analysis_data/LUAD_results.csv", row.names=1) # write the result dataframe and read it. The result dataframe is the result from the transcription DESeq analysis.
+```
+
+```{r}
+#assigning the gene names to results dataframe
+#assigning the -log10 values
+results[, "-log10(padj)"] <- -log10(results$padj)
+results[, "gene_name"] <- rna_genes_cleaned$gene_name
+```
+
+```{r}
+#generating the enhanced volcano plot
+EnhancedVolcano(results,
+                lab = results$gene_name,
+                x = "log2FoldChange",
+                y = "padj",
+                title = "Definition: Very High Exposure vs. Non Smoker",
+                pointSize = 1.0,
+                labSize = 5.0)
+```
+
+
+```{r}
+methylation_clinical <- as.data.frame(methylation450@colData)
+betas <- as.data.frame(methylation450@assays@data@listData)
+cpg_sites <- as.data.frame(methylation450@rowRanges@elementMetadata)
+#getting those dataframes in the environment from the methylation data downloaded from TCGA
+
+column_mask <- ifelse(colnames(methylation_clinical) %in% c('treatments', 'primary_site', 'disease_type'), F, T)
+methylation_clinical <- methylation_clinical[,column_mask]
+write.csv(methylation_clinical, 'luad_methylation_clinical.csv', row.names=FALSE)
+# mask out the list values in methylation_clinical so we can write it as a csv
+
+site_mask <- !grepl('-', cpg_sites$gene) & !grepl(';', cpg_sites$gene) & !is.na(cpg_sites$gene) & complete.cases(betas)
+betas <- betas[site_mask,]
+cpg_sites <- cpg_sites[site_mask,]
+# mask out the CpG sites that we don't want to study in this review project.
+
+write.csv(betas, 'luad_methylation_betas.csv')
+write.csv(cpg_sites, 'luad_cpg_sites.csv')
+methylation_clinical <- read.csv("/home1/ethenche/490_cluster/analysis_data/luad_methylation_clinical.csv")
+betas <- read.csv("/home1/ethenche/490_cluster/analysis_data/luad_methylation_betas.csv", row.names=1)
+cpg_sites <- read.csv("/home1/ethenche/490_cluster/analysis_data/luad_cpg_sites.csv", row.names=1)
+#writing and reading csv files codes for later use.
+```
+
+```{r}
+
+row.names(cleaned_clinic) <- cleaned_clinic$Tumor_Sample_Barcode
+adapted_methylation <- cleaned_clinic[methylation_clinical$patient,]
+#just as we matched the rna_clincal to the cleaned_clinic, we also need to match methylation_clinical to the cleaned_clinic
+adapted_methylation_na_mask <- !is.na(adapted_methylation$bcr_patient_uuid)
+adapted_methylation_cleaned <- adapted_methylation[adapted_methylation_na_mask, ]
+#mask out the NA values in the bcr_patient_uuid in the adapted_methylation
+adapted_methylation_cleaned$smoking_category <- ifelse(adapted_methylation_cleaned$smoking_category == "Very High Exposure", "Very High Exposure", ifelse(adapted_clinical_cleaned$smoking_category == "Non-smoker", "Non-smoker", "Neither"))
+neitherMask <- ifelse(adapted_methylation_cleaned$smoking_category == "Neither", F, T)
+adapted_methylation_cleaned <- adapted_methylation_cleaned[neitherMask, ]
+#masking all the values other than "Very High Exposure" and "Non-smoker", only keeping the very high exposure and non-smoker patients
+
+adapted_betas <- betas
+colnames(adapted_betas) <- rownames(adapted_methylation)
+#just like how I did it with the rna_counts, I also need to substitute the column name for betas to the rownames of adapted_methylation to ensure I can clean those two together
+betas_na_mask <- ifelse(colnames(adapted_betas)%in%rownames(adapted_methylation_cleaned), T,F)
+adapted_betas_cleaned <- adapted_betas[,betas_na_mask]
+#clean the betas by masking all the colnames that is not present in the rownames in adapted_methylation_cleaned out.
+
+
+adapted_methylation_cleaned$very_high_exposure <- adapted_methylation_cleaned$smoking_category == 'Very High Exposure' # 
+#assigning the column we are going to use the the later analysis.
+
+mval <- t(apply(adapted_betas_cleaned, 1, function(x) log2(x/(1-x))))# finding which site is more differentially methylated
+
+design <- model.matrix(~ very_high_exposure, data = adapted_methylation_cleaned) # make and interpret the lm model
+fit <- lmFit(mval, design)
+fit2 <- eBayes(fit)
+```
+
+```{r}
+dat <- data.frame(foldchange = fit[["coefficients"]][,2], logPvalue =  -log10(p.adjust(fit2[["p.value"]][,2],method='BY')), geneName = cpg_sites$gene)
+dat$threshold <- as.factor(abs(dat$foldchange) < 1)
+# extracting the fit model into a dataframe
+#Visualization
+cols <- c("TRUE" = "grey", "FALSE" = "blue")
+ggplot(data=dat, aes(x=foldchange, y = logPvalue, color=threshold)) +
+  geom_point(alpha=.2, size=0.6) +
+  scale_colour_manual(values = cols) +
+  geom_vline(xintercept = 1, colour="#990000", linetype="dashed") + 
+  geom_vline(xintercept = - 1, colour="#990000", linetype="dashed") +
+  geom_hline(yintercept = 2, colour = "#990000", linetype="dashed") +
+  theme(legend.position="none") +
+  xlab("Fold Change") +
+  ylab("-log10 p value") +
+  theme_bw() +
+  theme(legend.position = "none")
+#plotting the data
+
+write.csv(dat, "/home1/ethenche/490_cluster/analysis_data/LUAD_dat.csv")
+dat <- read.csv("/home1/ethenche/490_cluster/analysis_data/LUAD_dat.csv", row.names=1) # write the dat dataframe and read it. 
+```
+
+```{r}
+upregulated <- results[(results$log2FoldChange > 1), 'gene_name']
+hypomethylated <- dat[dat$foldchange < -0.75, 'geneName']
+interest_genes <- intersect(upregulated, hypomethylated)
+interest_genes#figure out all the genes we are interested in, this time it is the genes taht is both upregulated and hypomethylated
+interest_genes <- as.data.frame(interest_genes)
+write.csv(interest_genes, "/home1/ethenche/490_cluster/analysis_data/LUAD_interest_genes.csv")
+interest_genes <- read.csv("/home1/ethenche/490_cluster/analysis_data/LUAD_interest_genes.csv", row.names=1) # write the interest_gene dataframe and read it. 
+```
+
+```{r}
+rna_tpm <- rna_se@assays@data$tpm_unstrand
+rna_tpm <- as.data.frame(rna_tpm)
+colnames(rna_tpm) <- rownames(adapted_clinical)
+rownames(rna_tpm) <- rna_genes$gene_id
+write.csv(rna_tpm, "/home1/ethenche/490_cluster/analysis_data/LUAD_rna_tpm.csv")
+rna_tpm <- read.csv("/home1/ethenche/490_cluster/analysis_data/LUAD_rna_tpm.csv", row.names=1)
+#get rna_tpm data frame and assign the rownames for adapted_clinical to its colname and assign the gene_id column from rna_genes to be the rownames for rna_tpm. rna_tpm is simmilar to rna_counts, but they are normalized, so we can use it for epigenomics analysis
+
+rna_tpm_na_mask <- ifelse(colnames(rna_tpm)%in%rownames(adapted_clinical_cleaned), T, F)
+rna_tpm_cleaned <- rna_tpm[,rna_tpm_na_mask]
+#mask out the rna_tpm with the adapted_clinical_cleaned data frame.
+write.csv(rna_tpm_cleaned, "/home1/ethenche/490_cluster/analysis_data/LUAD_rna_tpm_cleaned.csv")
+rna_tpm_cleaned <- read.csv("/home1/ethenche/490_cluster/analysis_data/LUAD_rna_tpm_cleaned.csv", row.names=1)
+#write the rna_tpm_cleaned as csv.
+
+
+
+
+#for gender:
+gender_na_mask <- ifelse(adapted_clinical_cleaned$gender == "[Not Available]", FALSE,
+TRUE)
+rna_tpm_cleaned <- rna_tpm_cleaned[, gender_na_mask]
+
+#for race:
+race_na_mask <- ifelse(adapted_clinical_cleaned$race == "not reported", FALSE,
+TRUE)
+rna_tpm_cleaned <- rna_tpm_cleaned[, race_na_mask]
+
+#just like cleaning the adapted_clinical_cleaned and rna_counts_cleaned, clean out the na values for rna_tpm for gender and race.
+
+
+
+
+# pre-filtering genes
+
+#filtering the genes have a sum count of less than 20 out in the rna_tpm_cleaned data frame
+
+less_20_mask <- rowSums(rna_tpm_cleaned) >=20
+rna_tpm_cleaned<- rna_counts_cleaned[less_20_mask,]
+rna_genes_cleaned <- rna_genes[less_20_mask,]
+
+```
+
+```{r}
+#this code chunk is to prep for the later plotting.
+GENE<-"GPX5"
+
+gene_counts_mask <- rna_genes_cleaned$gene_name == GENE
+gene_betas_mask <- cpg_sites$gene == GENE
+
+adapted_clinical_very_high_exposure <- adapted_clinical_cleaned$smoking_category == "Very High Exposure"
+adapted_methylation_very_high_exposure <- adapted_methylation_cleaned$smoking_category == "Very High Exposure"
+
+adapted_clinical_non_smoker <- adapted_clinical_cleaned$smoking_category == "Non-smoker"
+adapted_methylation_non_smoker <- adapted_methylation_cleaned$smoking_category == "Non-smoker"
+
+rna_very_high_exposure <- as.numeric(unlist(rna_tpm_cleaned[gene_counts_mask, adapted_clinical_very_high_exposure]))
+methylation_very_high_exposure <- (adapted_betas_cleaned[gene_betas_mask, adapted_methylation_very_high_exposure])
+
+
+rna_non_smoker <- as.numeric(unlist(rna_tpm_cleaned[gene_counts_mask, adapted_clinical_non_smoker]))
+methylation_non_smoker <- (adapted_betas_cleaned[gene_betas_mask, adapted_methylation_non_smoker])
+```
+
+```{r}
+boxplot(rna_non_smoker, rna_very_high_exposure, xlab='Group', ylab='Counts', names=c('Non_smoker', 'Very High Exposure'))
+#make a boxplot for the difference in expression in different groups
+```
+
+```{r}
+plot(1:dim(methylation_non_smoker)[1], apply(methylation_non_smoker, 1, mean), col='blue', type='h', lwd=3, ylab='Average Beta', xlab='CpG sites')
+lines(1.3:(dim(methylation_non_smoker)[1]+0.3), apply(methylation_very_high_exposure, 1, mean), col='red', type='h', lwd=3)
+#make a plot showing the difference in methylation.
+```
+
+Add a new chunk by clicking the *Insert Chunk* button on the toolbar or by pressing *Ctrl+Alt+I*.
+
+When you save the notebook, an HTML file containing the code and output will be saved alongside it (click the *Preview* button or press *Ctrl+Shift+K* to preview the HTML file).
+
+The preview shows you a rendered HTML copy of the contents of the editor. Consequently, unlike *Knit*, *Preview* does not run any R code chunks. Instead, the output of the chunk when it was last run in the editor is displayed.
